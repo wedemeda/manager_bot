@@ -3,7 +3,6 @@ import logging
 import os
 
 from aiogram import Bot, Dispatcher, F
-from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
 from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton
 
@@ -68,31 +67,25 @@ async def create_services_keyboard() -> types.InlineKeyboardMarkup:
 @dp.callback_query(F.data == "refresh_services")
 async def refresh_services_handler(callback: types.CallbackQuery):
     """Обработчик обновления статусов"""
-    try:
-        new_kb = await create_services_keyboard()
 
-        # Сравниваем с текущей клавиатурой
-        current_kb = callback.message.reply_markup.inline_keyboard
-        new_kb_data = new_kb.inline_keyboard
+    new_kb = await create_services_keyboard()
 
-        # Проверяем изменения в статусах
-        has_changes = any(
-            current_btn.text != new_btn.text
-            for current_row, new_row in zip(current_kb, new_kb_data)
-            for current_btn, new_btn in zip(current_row, new_row)
-        )
+    # Сравниваем с текущей клавиатурой
+    current_kb = callback.message.reply_markup.inline_keyboard
+    new_kb_data = new_kb.inline_keyboard
 
-        if has_changes:
-            await callback.message.edit_reply_markup(reply_markup=new_kb)
-            await callback.answer("Статусы обновлены!")
-        else:
-            await callback.answer("Статусы не изменились")
+    # Проверяем изменения в статусах
+    has_changes = any(
+        current_btn.text != new_btn.text
+        for current_row, new_row in zip(current_kb, new_kb_data)
+        for current_btn, new_btn in zip(current_row, new_row)
+    )
 
-    except TelegramBadRequest:
+    if has_changes:
+        await callback.message.edit_reply_markup(reply_markup=new_kb)
+        await callback.answer("Статусы обновлены!")
+    else:
         await callback.answer("Статусы не изменились")
-    except Exception as e:
-
-        await callback.answer("Ошибка обновления", show_alert=True)
 
 
 @dp.callback_query(F.data.startswith("service_detail:"))
@@ -117,7 +110,7 @@ async def service_detail_handler(callback: types.CallbackQuery):
         await callback.answer(f"Ошибка получения статуса: {e}", show_alert=True)
 
 
-@dp.message(Command("status"))
+@dp.message(F.text == "Статус сервисов")
 async def status_command(message: types.Message):
     """Обработчик команды /status"""
     kb = await create_services_keyboard()
@@ -130,7 +123,7 @@ async def status_command(message: types.Message):
 main_kb = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="Узнать IP")],
-        [KeyboardButton(text="Статус сервиса")]
+        [KeyboardButton(text="Статус сервисов")]
     ],
     resize_keyboard=True,
     selective=False
@@ -140,42 +133,6 @@ main_kb = ReplyKeyboardMarkup(
 def aus_ip_getter():
     result = subprocess.run(["wget", "-qO-", "eth0.me"], stdout=subprocess.PIPE, text=True)
     return result.stdout.strip()
-
-
-def get_service_status(service_name="reels_bot.service"):
-    """Получает статус systemd сервиса"""
-
-    # Сначала проверяем общее состояние (active/inactive)
-    is_active = subprocess.run(
-        ["systemctl", "is-active", service_name],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        check=False
-    ).stdout.strip() == "active"
-
-    # Получаем полный статус
-    status_result = subprocess.run(
-        ["systemctl", "status", service_name],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        check=False
-    )
-
-    # Фильтруем нужные строки
-    output_lines = []
-    for line in status_result.stdout.splitlines():
-        line = line.strip()
-        if line.startswith(('Loaded:', 'Active:')):
-            output_lines.append(line)
-
-    # Добавляем индикатор
-    status_icon = "🟢" if is_active else "🔴"
-    if output_lines:
-        output_lines[0] = f"{status_icon} {output_lines[0]}"
-
-    return '\n'.join(output_lines) if output_lines else f"{status_icon} Service status not available"
 
 
 @dp.message(Command('start'))
@@ -188,12 +145,6 @@ async def start(message: Message):
 async def ip_sender(message: Message):
     if message.chat.id in ALLOWED_USERS:
         await message.answer(f'Текущий ip-адрес сервера:: {aus_ip_getter()}')
-
-
-@dp.message(F.text == 'Статус сервиса')
-async def ip_sender(message: Message):
-    if message.chat.id in ALLOWED_USERS:
-        await message.answer(f'{get_service_status()}')
 
 
 # Запуск бота
