@@ -5,7 +5,7 @@ import os
 from aiogram import Bot, Dispatcher, F
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
-from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton
 
 from dotenv import load_dotenv
 
@@ -21,59 +21,110 @@ dp = Dispatcher()
 from aiogram import types
 import subprocess
 
+# Конфигурация сервисов (легко добавлять новые)
+SERVICES = {
+    "reels_bot": "reels_bot.service",
+    "openvpn": "openvpn.service",
+    "apache": "apache2.service"
+}
 
-async def get_short_service_status(service_name="reels_bot.service") -> str:
-    """Возвращает текущий статус сервиса"""
+
+async def get_short_service_status(service_name: str) -> str:
+    """Возвращает статус сервиса с иконкой"""
 
     result = subprocess.run(
         ["systemctl", "is-active", service_name],
-        capture_output=True,
-        text=True
+        capture_output=True, text=True, timeout=3
     )
     status = result.stdout.strip()
-    return "🟢 Активен" if status == "active" else "🔴 Неактивен"
+    return "🟢" if status == "active" else "🔴"
 
 
-async def create_status_keyboard():
-    """Создает клавиатуру с текущим статусом"""
-    status = await get_short_service_status()
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=f"Статус: {status}", callback_data="show_status")],
-        [InlineKeyboardButton(text="🔄 Обновить", callback_data="refresh_status")]
+async def create_services_keyboard() -> types.InlineKeyboardMarkup:
+    """Генерирует клавиатуру с актуальными статусами"""
+    buttons = []
+
+    # Собираем статусы асинхронно
+    for service_key, service_name in SERVICES.items():
+        status_icon = await get_short_service_status(service_name)
+        buttons.append([
+            types.InlineKeyboardButton(
+                text=f"{status_icon} {service_key}",
+                callback_data=f"service_detail:{service_key}"
+            )
+        ])
+
+    # Добавляем кнопку обновления
+    buttons.append([
+        types.InlineKeyboardButton(
+            text="🔄 Обновить",
+            callback_data="refresh_services"
+        )
     ])
 
+    return types.InlineKeyboardMarkup(inline_keyboard=buttons)
 
-@dp.callback_query(lambda c: c.data == "refresh_status")
-async def refresh_status(callback: types.CallbackQuery):
+
+@dp.callback_query(F.data == "refresh_services")
+async def refresh_services_handler(callback: types.CallbackQuery):
+    """Обработчик обновления статусов"""
     try:
-        # Получаем новую клавиатуру
-        new_kb = await create_status_keyboard()
+        new_kb = await create_services_keyboard()
 
-        # Получаем текущий текст кнопки статуса
-        current_status = callback.message.reply_markup.inline_keyboard[0][0].text
-        new_status = new_kb.inline_keyboard[0][0].text
+        # Сравниваем с текущей клавиатурой
+        current_kb = callback.message.reply_markup.inline_keyboard
+        new_kb_data = new_kb.inline_keyboard
 
-        # Обновляем только если статус изменился
-        if current_status != new_status:
+        # Проверяем изменения в статусах
+        has_changes = any(
+            current_btn.text != new_btn.text
+            for current_row, new_row in zip(current_kb, new_kb_data)
+            for current_btn, new_btn in zip(current_row, new_row)
+        )
+
+        if has_changes:
             await callback.message.edit_reply_markup(reply_markup=new_kb)
-            await callback.answer("Статус обновлён!")
+            await callback.answer("Статусы обновлены!")
         else:
-            await callback.answer("Статус не изменился")
+            await callback.answer("Статусы не изменились")
 
     except TelegramBadRequest:
-        await callback.answer("Статус не изменился")
+        await callback.answer("Статусы не изменились")
+    except Exception as e:
+
+        await callback.answer("Ошибка обновления", show_alert=True)
 
 
-@dp.callback_query(lambda c: c.data == "show_status")
-async def show_status(callback: types.CallbackQuery):
-    status = await get_short_service_status()
-    await callback.answer(f"Текущий статус: {status}", show_alert=True)
+@dp.callback_query(F.data.startswith("service_detail:"))
+async def service_detail_handler(callback: types.CallbackQuery):
+    """Показывает детали сервиса"""
+    service_key = callback.data.split(":")[1]
+    service_name = SERVICES[service_key]
+
+    try:
+        # Получаем подробный статус
+        result = subprocess.run(
+            ["systemctl", "status", service_name],
+            capture_output=True, text=True, timeout=5
+        )
+        status_text = result.stdout.split('\n')[0:3]  # Берем первые 3 строки
+        await callback.answer(
+            "\n".join(status_text),
+            show_alert=True
+        )
+    except Exception as e:
+
+        await callback.answer(f"Ошибка получения статуса: {e}", show_alert=True)
 
 
 @dp.message(Command("status"))
-async def cmd_status(message: types.Message):
-    kb = await create_status_keyboard()
-    await message.answer("Статус сервиса:", reply_markup=kb)
+async def status_command(message: types.Message):
+    """Обработчик команды /status"""
+    kb = await create_services_keyboard()
+    await message.answer(
+        "📊 Статус сервисов:",
+        reply_markup=kb
+    )
 
 
 main_kb = ReplyKeyboardMarkup(
